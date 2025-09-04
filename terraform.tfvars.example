@@ -1,0 +1,41 @@
+# Terraform Variables Example File
+# Copy this file to terraform.tfvars and update with your actual values
+# terraform.tfvars is ignored by git to protect sensitive information
+
+# AWS Configuration
+aws_region = "us-east-1"  # Change to your preferred region
+
+# Optional: Configure assume role for cross-account access
+# Uncomment and configure if you need to assume a role
+# assume_role_arn = "arn:aws:iam::YOUR-ACCOUNT-ID:role/YOUR-ROLE-NAME"
+# assume_role_session_name = "your-session-name"
+
+# Default tags applied to all resources
+default_tags = {
+  owner   = "Your Name"
+  project = "aws-control-tower-config"
+  domain  = "cloud"
+  repo    = "public"
+}
+
+# Application Configuration
+excluded_accounts = "['111111111111', '222222222222', '333333333333']"
+
+source_s3_bucket = "your-s3-bucket-name"
+
+lambda_s3_key = "path/to/your/lambda_functions.zip"
+
+config_recorder_strategy = "EXCLUSION"
+
+config_recorder_excluded_resource_types = "AWS::HealthLake::FHIRDatastore,AWS::Pinpoint::Segment,AWS::Pinpoint::ApplicationSettings"
+
+config_recorder_included_resource_types = "AWS::S3::Bucket,AWS::CloudTrail::Trail"
+
+config_recorder_daily_resource_types = "AWS::AutoScaling::AutoScalingGroup,AWS::AutoScaling::LaunchConfiguration"
+
+config_recorder_daily_global_resource_types = "AWS::IAM::Policy,AWS::IAM::User,AWS::IAM::Role,AWS::IAM::Group"
+
+config_recorder_default_recording_frequency = "CONTINUOUS"
+
+# SNS Alert Configuration
+alert_email_address = "your-email@example.com"  # Email address to receive Lambda failure alerts

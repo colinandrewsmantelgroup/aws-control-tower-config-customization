@@ -24,6 +24,16 @@ import cfnresponse
 import os
 import logging
 import ast
+import json
+from itertools import islice
+
+def batched(iterable, n):
+    # batched('ABCDEFG', 3) → ABC DEF G
+    if n < 1:
+        raise ValueError('n must be at least one')
+    iterator = iter(iterable)
+    while batch := tuple(islice(iterator, n)):
+        yield batch
 
 def lambda_handler(event, context):
     
@@ -103,6 +113,14 @@ def lambda_handler(event, context):
         exception_type = e.__class__.__name__
         exception_message = str(e)
         logging.exception(f'{exception_type}: {exception_message}')
+        
+        # Send failure response to CloudFormation if this was a CloudFormation-triggered event
+        if 'LogicalResourceId' in event:
+            response = {}
+            cfnresponse.send(event, context, cfnresponse.FAILED, response, "CustomResourcePhysicalID")
+        
+        # Re-raise the exception to ensure Lambda fails
+        raise e
 
 
 def override_config_recorder(excluded_accounts, sqs_url, account, event):
@@ -119,43 +137,92 @@ def override_config_recorder(excluded_accounts, sqs_url, account, event):
             page_iterator = paginator.paginate(StackSetName ='AWSControlTowerBP-BASELINE-CONFIG', StackInstanceAccount=account)
             
         sqs_client = boto3.client('sqs')
+        messages = []
         for page in page_iterator:
             logging.info(page)
             
             for item in page['Summaries']:
                 account = item['Account']
                 region = item['Region']
-                send_message_to_sqs(event, account, region, excluded_accounts, sqs_client, sqs_url)
+                
+                #Proceed only if the account is not excluded
+                if account not in excluded_accounts:
+                    sqs_msg = f'{{"Account": "{account}", "Region": "{region}", "Event": "{event}"}}'
+                    messages.append(sqs_msg)
+                else:    
+                    logging.info(f'Account excluded: {account}')
+        
+        send_message_batch_to_sqs(messages, sqs_client, sqs_url)                            
                     
     except Exception as e:
         exception_type = e.__class__.__name__
         exception_message = str(e)
         logging.exception(f'{exception_type}: {exception_message}')
+        # Re-raise the exception to propagate it up
+        raise e
 
-def send_message_to_sqs(event, account, region, excluded_accounts, sqs_client, sqs_url):
+def send_message_to_sqs(sqs_msg, excluded_accounts, sqs_client, sqs_url):
     
     try:
-
-        #Proceed only if the account is not excluded
-        if account not in excluded_accounts:
-        
-            #construct sqs message
-            sqs_msg = f'{{"Account": "{account}", "Region": "{region}", "Event": "{event}"}}'
-
-            #send message to sqs
-            response = sqs_client.send_message(
+        #send message to sqs
+        response = sqs_client.send_message(
             QueueUrl=sqs_url,
             MessageBody=sqs_msg)
-            logging.info(f'message sent to sqs: {sqs_msg}')
-            
-        else:    
-            logging.info(f'Account excluded: {account}')
+        logging.info(f'message sent to sqs: {sqs_msg}')
                 
     except Exception as e:
         exception_type = e.__class__.__name__
         exception_message = str(e)
-        logging.exception(f'{exception_type}: {exception_message}') 
-                   
+        logging.exception(f'{exception_type}: {exception_message}')
+        # Re-raise the exception to propagate it up
+        raise e
+
+def send_message_batch_to_sqs(message_bodies, sqs_client, sqs_url, message_attributes=None,):
+    """
+    Sends batches of 10 messages to an SQS queue.
+
+    :param message_bodies: tuple of message_body
+    :param sqs_client: A Boto3 SQS client object.
+    :param sqs_url: The URL of the SQS queue to which the message should be sent.
+    :param message_attributes: Optional. A dictionary of message attributes to send with the message.
+    :return: The response from the SQS service.
+    """
+    logging.info(f"Processing {len(message_bodies)} items")
+    batches = batched(message_bodies, 10)
+    for batch in batches:
+        i = 1
+        entries = []
+        for message_body in batch:
+            # Parse JSON string to dictionary
+            message_dict = json.loads(message_body)
+            message_dict['MessageGroupID'] = f"{message_dict['Account']}-{message_dict['Event']}"
+
+            formatted_message = {
+                "Id": str(i),
+                "MessageBody": json.dumps(message_dict),
+                "MessageAttributes": message_attributes or {},
+                "MessageGroupId": message_dict['MessageGroupID']
+            }
+
+            entries.append(formatted_message)
+            i += 1       
+        try:
+            response = sqs_client.send_message_batch(
+                    QueueUrl=sqs_url,
+                    Entries = entries
+                )
+            # Check for any failed messages in the batch response
+            if 'Failed' in response and len(response['Failed']) > 0:
+                logging.warning(f"Failed to send some messages: {response['Failed']}")
+            logging.info(f"Successfully sent batch of {len(entries)} messages.")
+            return response
+        except Exception as e:
+            exception_type = e.__class__.__name__
+            exception_message = str(e)
+            logging.exception(f'{exception_type}: {exception_message}')
+            # Re-raise the exception to propagate it up
+            raise e
+
 def update_excluded_accounts(excluded_accounts,sqs_url):
     
     try:
@@ -179,4 +246,6 @@ def update_excluded_accounts(excluded_accounts,sqs_url):
     except Exception as e:
         exception_type = e.__class__.__name__
         exception_message = str(e)
-        logging.exception(f'{exception_type}: {exception_message}')  
+        logging.exception(f'{exception_type}: {exception_message}')
+        # Re-raise the exception to propagate it up
+        raise e

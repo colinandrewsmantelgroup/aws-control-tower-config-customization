@@ -244,3 +244,6 @@ def lambda_handler(event, context):
         exception_type = e.__class__.__name__
         exception_message = str(e)
         logging.exception(f'{exception_type}: {exception_message}')
+        
+        # Re-raise the exception to ensure Lambda fails
+        raise e
